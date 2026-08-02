@@ -9,3 +9,5 @@ This is a newly initialized, empty repository. As of the initial commit it conta
 Because the repository has no tooling to discover, this file intentionally omits build/lint/test commands and architecture notes. Update this file once the project has a stack, a build/test workflow, and a meaningful structure worth documenting.
 
 new branch test0802
+
+新增skill
