@@ -1,7 +1,4 @@
-"""KBMetaStore 测试：元数据 CRUD 与文档登记，落临时 kb_meta.json。
-
-不依赖 chroma，纯文件 I/O；数据路径走 conftest 的 tmp_data_dir。
-"""
+"""KBMetaStore 测试：元数据 CRUD、slug 生成、文档登记与边界。"""
 
 from pathlib import Path
 
@@ -39,10 +36,26 @@ def test_ascii_name_slugified(store: KBMetaStore) -> None:
 
 def test_chinese_name_falls_back_to_short_id(store: KBMetaStore) -> None:
     kb = store.create("客服知识库", "")
-    # 纯中文名无 ASCII 部分，slug 回退为短 id，collection_name 仍合法 ASCII
+
     assert kb.slug == kb.id[:8]
     assert kb.collection_name == f"kb_{kb.id[:8]}"
     assert kb.slug.isascii()
+
+
+def test_slug_special_chars(store: KBMetaStore) -> None:
+    kb = store.create("My/KB:1", "")
+
+    assert "/" not in kb.slug
+    assert ":" not in kb.slug
+    assert "my_kb_1" in kb.slug
+    assert kb.slug.isascii()
+
+
+def test_create_empty_name(store: KBMetaStore) -> None:
+    kb = store.create("", "")
+
+    assert kb.slug == kb.id[:8]
+    assert kb.collection_name == f"kb_{kb.id[:8]}"
 
 
 def test_duplicate_names_get_unique_collections(store: KBMetaStore) -> None:
@@ -70,6 +83,16 @@ def test_delete_returns_kb_and_removes(store: KBMetaStore) -> None:
     assert store.delete("nope") is None
 
 
+def test_delete_then_recreate(store: KBMetaStore) -> None:
+    kb1 = store.create("手册", "")
+    store.delete(kb1.id)
+    kb2 = store.create("手册", "")
+
+    assert kb1.id != kb2.id
+    assert kb1.collection_name != kb2.collection_name
+    assert len(store.list_kbs()) == 1
+
+
 def test_register_new_document_updates_counts(store: KBMetaStore) -> None:
     kb = store.create("手册", "")
     store.register_document(kb.id, "a.md", chunk_count=5)
@@ -91,6 +114,16 @@ def test_register_same_source_updates_chunk_count(store: KBMetaStore) -> None:
     assert refreshed.chunk_count == 8
 
 
+def test_register_zero_chunks(store: KBMetaStore) -> None:
+    kb = store.create("手册", "")
+    store.register_document(kb.id, "a.md", 0)
+
+    refreshed = store.get(kb.id)
+    assert refreshed is not None
+    assert refreshed.document_count == 1
+    assert refreshed.chunk_count == 0
+
+
 def test_unregister_document(store: KBMetaStore) -> None:
     kb = store.create("手册", "")
     store.register_document(kb.id, "a.md", 5)
@@ -101,6 +134,45 @@ def test_unregister_document(store: KBMetaStore) -> None:
     assert refreshed is not None
     assert refreshed.document_count == 1
     assert refreshed.chunk_count == 3
+
+
+def test_unregister_nonexistent_source_noop(store: KBMetaStore) -> None:
+    kb = store.create("手册", "")
+    store.register_document(kb.id, "a.md", 5)
+    store.unregister_document(kb.id, "b.md")  # 不存在
+
+    refreshed = store.get(kb.id)
+    assert refreshed is not None
+    assert refreshed.document_count == 1
+    assert refreshed.chunk_count == 5
+
+
+def test_register_unregister_cycle(store: KBMetaStore) -> None:
+    kb = store.create("手册", "")
+    store.register_document(kb.id, "a.md", 5)
+    store.unregister_document(kb.id, "a.md")
+    store.register_document(kb.id, "a.md", 3)
+
+    refreshed = store.get(kb.id)
+    assert refreshed is not None
+    assert refreshed.document_count == 1
+    assert refreshed.chunk_count == 3
+
+
+def test_multiple_kbs_independent_counts(store: KBMetaStore) -> None:
+    kb1 = store.create("库一", "")
+    kb2 = store.create("库二", "")
+    store.register_document(kb1.id, "a.md", 5)
+    store.register_document(kb1.id, "b.md", 3)
+    store.register_document(kb2.id, "c.md", 7)
+
+    r1 = store.get(kb1.id)
+    r2 = store.get(kb2.id)
+    assert r1 is not None and r2 is not None
+    assert r1.document_count == 2
+    assert r1.chunk_count == 8
+    assert r2.document_count == 1
+    assert r2.chunk_count == 7
 
 
 def test_register_document_missing_kb_raises(store: KBMetaStore) -> None:

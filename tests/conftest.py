@@ -1,10 +1,13 @@
-"""pytest 共享 fixtures。"""
+"""pytest 共享 fixtures 与测试假对象。"""
 
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 from rag_cs.config import Settings, get_settings
 from rag_cs.kb.registry import KBMetaStore
@@ -57,3 +60,48 @@ def vstore(tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> VectorStoreSe
 def registry(tmp_data_dir: Path) -> KBMetaStore:
     """KBMetaStore，元数据落 tmp_data_dir。"""
     return KBMetaStore()
+
+
+class FakeChatModel(BaseChatModel):
+    """按对话中已有 AIMessage 数量依次返回预设回复；bind_tools 返回自身。
+
+    用于离线驱动 LangGraph Agent 的 ReAct 循环（检索->生成 / 直接回答）。
+    """
+
+    responses: list[BaseMessage]
+
+    def _pick(self, messages: list[BaseMessage]) -> BaseMessage:
+        n_ai = sum(1 for m in messages if isinstance(m, AIMessage))
+        return self.responses[n_ai] if n_ai < len(self.responses) else AIMessage(content="(end)")
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        return ChatResult(generations=[ChatGeneration(message=self._pick(messages))])
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        msg = self._pick(messages)
+        text = msg.content if isinstance(msg.content, str) else str(msg.content)
+        first = True
+        for i in range(0, len(text) or 1, 3):
+            chunk_msg = AIMessageChunk(
+                content=text[i : i + 3],
+                tool_calls=msg.tool_calls if first else [],
+            )
+            yield ChatGenerationChunk(message=chunk_msg)
+            first = False
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    @property
+    def _llm_type(self):
+        return "fake"
+
+
+def make_retrieve_call(query: str) -> AIMessage:
+    """构造一个调用 retrieve_kb 工具的 AIMessage。"""
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "retrieve_kb", "args": {"query": query}, "id": "c1", "type": "tool_call"}
+        ],
+    )
