@@ -16,6 +16,7 @@ import chromadb
 from chromadb.api.types import Embeddings, Metadata, QueryResult, Where
 from chromadb.config import Settings as ChromaSettings
 from chromadb.errors import NotFoundError
+from langchain_core.embeddings import Embeddings as LCEmbeddings
 
 from rag_cs.config import Settings, get_settings
 from rag_cs.providers.factory import get_embeddings
@@ -50,7 +51,13 @@ class VectorStoreService:
             path=self._s.chroma_dir,
             settings=ChromaSettings(anonymized_telemetry=False),
         )
-        self._embeddings = get_embeddings(self._s)
+        self._embeddings: LCEmbeddings | None = None
+
+    def _get_embeddings(self) -> LCEmbeddings:
+        """惰性构造 embeddings：仅 add/search 需要，避免无 API key 时建库页崩溃。"""
+        if self._embeddings is None:
+            self._embeddings = get_embeddings(self._s)
+        return self._embeddings
 
     def ensure_collection(self, name: str) -> None:
         """确保集合存在（不存在则创建）。"""
@@ -131,7 +138,7 @@ class VectorStoreService:
         """
         if not collections or top_k <= 0:
             return []
-        query_embedding = self._embeddings.embed_query(query)
+        query_embedding = self._get_embeddings().embed_query(query)
         hits: list[SearchHit] = []
         for name in collections:
             if not self.collection_exists(name):
@@ -150,7 +157,7 @@ class VectorStoreService:
         out: list[list[float]] = []
         for i in range(0, len(texts), _EMBED_BATCH_SIZE):
             batch = texts[i : i + _EMBED_BATCH_SIZE]
-            out.extend(self._embeddings.embed_documents(batch))
+            out.extend(self._get_embeddings().embed_documents(batch))
         return out
 
 
