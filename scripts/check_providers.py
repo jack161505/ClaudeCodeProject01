@@ -24,7 +24,8 @@ def check_chat() -> bool:
 
 def check_embeddings() -> bool:
     s = get_settings()
-    print(f"[embedding] provider={s.embedding_provider.value} model={s.embedding_model}")
+    provider = s.embedding_provider.value
+    print(f"[embedding] provider={provider} model={s.embedding_model}")
     try:
         vec = get_embeddings(s).embed_query("你好")
         print(f"  ✓ 维度: {len(vec)}  前5维: {vec[:5]}")
